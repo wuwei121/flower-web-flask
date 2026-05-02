@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+flask_server*.log
+static/uploads/*
+!static/uploads/.gitkeep

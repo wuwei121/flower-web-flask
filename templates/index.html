@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>花卉分类</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="page">
+    <section class="panel">
+      <div class="header">
+        <div class="title-block">
+          <p class="eyebrow">Oxford 102 Flower Classifier</p>
+          <h1>花卉图片分类</h1>
+        </div>
+        <span class="device">运行设备：{{ device }}</span>
+      </div>
+
+      <form id="uploadForm" class="upload-form" method="post" enctype="multipart/form-data" novalidate>
+        <label class="file-picker">
+          <input id="imageInput" type="file" name="image" accept="image/*">
+          <span>选择图片</span>
+        </label>
+        <span id="fileName" class="file-name">尚未选择图片</span>
+        <button id="submitButton" type="submit">开始预测</button>
+        <button id="clearButton" class="secondary-button" type="button">清空</button>
+      </form>
+
+      <div id="statusMessage" class="status hidden"></div>
+      <div id="clientAlert" class="alert hidden">请先选择图片</div>
+      <div id="serverAlert" class="alert {% if not error %}hidden{% endif %}">{{ error or "" }}</div>
+
+      <div class="content">
+        <section class="preview">
+          <img
+            id="previewImage"
+            class="{% if not image_url %}hidden{% endif %}"
+            src="{{ image_url or '' }}"
+            alt="上传的花卉图片"
+          >
+          <div id="previewEmpty" class="empty {% if image_url %}hidden{% endif %}">
+            上传一张花卉图片后，这里会显示预览。
+          </div>
+        </section>
+
+        <section class="results">
+          <div id="resultContent" class="{% if not top1 %}hidden{% endif %}">
+            {% if top1 %}
+              <div class="top-result">
+                <p>Top-1 预测</p>
+                <h2>{{ top1.zh }}</h2>
+                <div class="english">{{ top1.en }}</div>
+                <div class="confidence">{{ top1.confidence_pct }}</div>
+              </div>
+
+              <h3>Top-5 候选结果</h3>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>排名</th>
+                      <th>类别</th>
+                      <th>英文名</th>
+                      <th>置信度</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for item in top5 %}
+                      <tr>
+                        <td>{{ item.rank }}</td>
+                        <td>{{ item.zh }}</td>
+                        <td>{{ item.en }}</td>
+                        <td>{{ item.confidence_pct }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+          </div>
+          <div id="resultEmpty" class="empty result-empty {% if top1 %}hidden{% endif %}">
+            预测结果会在上传后显示。
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("uploadForm");
+    const imageInput = document.getElementById("imageInput");
+    const previewImage = document.getElementById("previewImage");
+    const previewEmpty = document.getElementById("previewEmpty");
+    const resultContent = document.getElementById("resultContent");
+    const resultEmpty = document.getElementById("resultEmpty");
+    const clearButton = document.getElementById("clearButton");
+    const submitButton = document.getElementById("submitButton");
+    const fileName = document.getElementById("fileName");
+    const clientAlert = document.getElementById("clientAlert");
+    const serverAlert = document.getElementById("serverAlert");
+    const statusMessage = document.getElementById("statusMessage");
+
+    const MAX_IMAGE_SIDE = 1024;
+    const JPEG_QUALITY = 0.82;
+
+    let previewObjectUrl = null;
+    let selectedOriginalFile = null;
+    let compressedUploadFile = null;
+    let isCompressing = false;
+    let compressionToken = 0;
+    let activeRequestController = null;
+
+    function hideElement(element) {
+      element.classList.add("hidden");
+    }
+
+    function showElement(element) {
+      element.classList.remove("hidden");
+    }
+
+    function hideAllMessages() {
+      clientAlert.textContent = "请先选择图片";
+      serverAlert.textContent = "";
+      hideElement(clientAlert);
+      hideElement(serverAlert);
+      hideStatus();
+    }
+
+    function showStatus(message) {
+      statusMessage.textContent = message;
+      showElement(statusMessage);
+    }
+
+    function hideStatus() {
+      statusMessage.textContent = "";
+      hideElement(statusMessage);
+    }
+
+    function setSubmitting(isSubmitting) {
+      submitButton.disabled = isSubmitting;
+      imageInput.disabled = isSubmitting;
+      submitButton.textContent = isSubmitting ? "正在预测，请稍候..." : "开始预测";
+      form.classList.toggle("is-submitting", isSubmitting);
+    }
+
+    function revokePreviewObjectUrl() {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+        previewObjectUrl = null;
+      }
+    }
+
+    function resetPreview() {
+      revokePreviewObjectUrl();
+      previewImage.removeAttribute("src");
+      previewImage.src = "";
+      hideElement(previewImage);
+      previewEmpty.textContent = "上传一张花卉图片后，这里会显示预览。";
+      showElement(previewEmpty);
+    }
+
+    function showPreview(file) {
+      revokePreviewObjectUrl();
+      previewObjectUrl = URL.createObjectURL(file);
+      previewImage.src = previewObjectUrl;
+      showElement(previewImage);
+      hideElement(previewEmpty);
+    }
+
+    function resetResults() {
+      resultContent.innerHTML = "";
+      hideElement(resultContent);
+      resultEmpty.textContent = "预测结果会在上传后显示。";
+      showElement(resultEmpty);
+    }
+
+    function clearAllState() {
+      if (activeRequestController) {
+        activeRequestController.abort();
+        activeRequestController = null;
+      }
+
+      compressionToken += 1;
+      isCompressing = false;
+      selectedOriginalFile = null;
+      compressedUploadFile = null;
+
+      form.reset();
+      imageInput.value = "";
+      imageInput.disabled = false;
+      submitButton.disabled = false;
+      submitButton.textContent = "开始预测";
+      form.classList.remove("is-submitting");
+
+      fileName.textContent = "尚未选择图片";
+      resetPreview();
+      resetResults();
+      hideAllMessages();
+    }
+
+    function getCompressedName(originalName) {
+      const stem = originalName.replace(/\.[^.]+$/, "") || "flower";
+      return `${stem}_compressed.jpg`;
+    }
+
+    function loadImage(file) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        const url = URL.createObjectURL(file);
+
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error("图片读取失败，请换一张再试。"));
+        };
+        image.src = url;
+      });
+    }
+
+    function canvasToBlob(canvas, type, quality) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error("图片压缩失败，请换一张再试。"));
+          }
+        }, type, quality);
+      });
+    }
+
+    async function compressImage(file) {
+      const image = await loadImage(file);
+      const scale = Math.min(1, MAX_IMAGE_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+
+      const blob = await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY);
+      if (blob.size >= file.size && scale === 1) {
+        return file;
+      }
+
+      return new File([blob], getCompressedName(file.name), {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      });
+    }
+
+    async function prepareCompressedImage(file, token) {
+      isCompressing = true;
+      compressedUploadFile = null;
+      showStatus("正在优化图片，减少上传时间...");
+
+      try {
+        const optimizedFile = await compressImage(file);
+        if (token !== compressionToken) {
+          return;
+        }
+
+        compressedUploadFile = optimizedFile;
+        const uploadedKb = Math.max(1, Math.round(optimizedFile.size / 1024));
+        const savedKb = Math.max(0, Math.round((file.size - optimizedFile.size) / 1024));
+        fileName.textContent = optimizedFile === file
+          ? `${file.name}（${uploadedKb} KB）`
+          : `${file.name}（已压缩，约 ${uploadedKb} KB，减少 ${savedKb} KB）`;
+        showPreview(optimizedFile);
+        hideStatus();
+      } catch (error) {
+        if (token !== compressionToken) {
+          return;
+        }
+
+        compressedUploadFile = file;
+        fileName.textContent = `${file.name}（使用原图上传）`;
+        showPreview(file);
+        showStatus(error.message || "图片压缩失败，将使用原图上传。");
+      } finally {
+        if (token === compressionToken) {
+          isCompressing = false;
+        }
+      }
+    }
+
+    function applyPredictionHtml(html) {
+      const parser = new DOMParser();
+      const nextDocument = parser.parseFromString(html, "text/html");
+      const nextResultContent = nextDocument.getElementById("resultContent");
+      const nextServerAlert = nextDocument.getElementById("serverAlert");
+
+      if (nextServerAlert && nextServerAlert.textContent.trim()) {
+        serverAlert.textContent = nextServerAlert.textContent.trim();
+        showElement(serverAlert);
+        resetResults();
+        return;
+      }
+
+      if (nextResultContent && nextResultContent.innerHTML.trim()) {
+        resultContent.innerHTML = nextResultContent.innerHTML;
+        showElement(resultContent);
+        hideElement(resultEmpty);
+      } else {
+        resetResults();
+      }
+    }
+
+    imageInput.addEventListener("change", () => {
+      hideAllMessages();
+      resetResults();
+
+      const file = imageInput.files && imageInput.files[0];
+      if (!file) {
+        clearAllState();
+        return;
+      }
+
+      compressionToken += 1;
+      selectedOriginalFile = file;
+      compressedUploadFile = null;
+      fileName.textContent = file.name;
+      showPreview(file);
+      prepareCompressedImage(file, compressionToken);
+    });
+
+    clearButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      clearAllState();
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const fileToUpload = compressedUploadFile || selectedOriginalFile;
+      if (!fileToUpload) {
+        clientAlert.textContent = "请先选择图片";
+        showElement(clientAlert);
+        return;
+      }
+
+      if (isCompressing) {
+        showStatus("图片仍在优化中，请稍候再开始预测。");
+        return;
+      }
+
+      hideAllMessages();
+      showStatus("正在预测，请稍候...");
+      setSubmitting(true);
+
+      const formData = new FormData();
+      formData.append("image", fileToUpload, fileToUpload.name);
+
+      const requestController = new AbortController();
+      activeRequestController = requestController;
+
+      try {
+        const response = await fetch(form.action || window.location.href, {
+          method: "POST",
+          body: formData,
+          credentials: "same-origin",
+          signal: requestController.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`服务器返回 ${response.status}`);
+        }
+
+        const html = await response.text();
+        if (activeRequestController !== requestController) {
+          return;
+        }
+
+        applyPredictionHtml(html);
+        hideStatus();
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          clientAlert.textContent = `预测请求失败：${error.message || "请检查网络后重试。"}`;
+          showElement(clientAlert);
+          hideStatus();
+        }
+      } finally {
+        if (activeRequestController === requestController) {
+          activeRequestController = null;
+        }
+        setSubmitting(false);
+      }
+    });
+  </script>
+</body>
+</html>
