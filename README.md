@@ -1,3 +1,12 @@
+---
+title: Flower Image Classification
+emoji: 🌸
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_port: 7860
+---
+
 # flower_web_flask
 
 本项目是花卉分类桌面版项目复制出的本地 Flask Web 版，复用现有 ResNet18 模型权重和 `model/class_names_zh_en.json`，不需要重新训练模型。
