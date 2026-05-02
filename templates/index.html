@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>花卉分类</title>
+  <title>基于卷积神经网络的花卉图像分类系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -12,9 +12,10 @@
       <div class="header">
         <div class="title-block">
           <p class="eyebrow">Oxford 102 Flower Classifier</p>
-          <h1>花卉图片分类</h1>
+          <h1>基于卷积神经网络的花卉图像分类系统</h1>
+          <p class="subtitle">基于 ResNet18 模型与 Oxford 102 Flowers 数据集，支持图片上传、花卉识别与 Top-5 预测结果展示。</p>
         </div>
-        <span class="device">运行设备：{{ device }}</span>
+        <span class="device">运行环境：云端服务器 CPU 推理</span>
       </div>
 
       <form id="uploadForm" class="upload-form" method="post" enctype="multipart/form-data" novalidate>
@@ -28,50 +29,61 @@
       </form>
 
       <div id="statusMessage" class="status hidden"></div>
-      <div id="clientAlert" class="alert hidden">请先选择图片</div>
+      <div id="clientAlert" class="alert hidden">请先选择一张花卉图片</div>
       <div id="serverAlert" class="alert {% if not error %}hidden{% endif %}">{{ error or "" }}</div>
 
       <div class="content">
-        <section class="preview">
+        <section class="preview" aria-label="图片预览区域">
           <img
             id="previewImage"
             class="{% if not image_url %}hidden{% endif %}"
             src="{{ image_url or '' }}"
             alt="上传的花卉图片"
           >
-          <div id="previewEmpty" class="empty {% if image_url %}hidden{% endif %}">
-            上传一张花卉图片后，这里会显示预览。
+          <div id="previewEmpty" class="empty preview-empty {% if image_url %}hidden{% endif %}">
+            <div>
+              <strong>图像预览</strong>
+              <span>上传一张花卉图片后，系统将在此展示待识别图像，便于对照预测结果。</span>
+            </div>
           </div>
         </section>
 
-        <section class="results">
+        <section class="results" aria-label="预测结果区域">
           <div id="resultContent" class="{% if not top1 %}hidden{% endif %}">
             {% if top1 %}
               <div class="top-result">
-                <p>Top-1 预测</p>
-                <h2>{{ top1.zh }}</h2>
-                <div class="english">{{ top1.en }}</div>
-                <div class="confidence">{{ top1.confidence_pct }}</div>
+                <div>
+                  <p>Top-1 预测结果</p>
+                  <h2>{{ top1.zh }}</h2>
+                  <div class="english">{{ top1.en }}</div>
+                </div>
+                <div class="confidence-block">
+                  <span>置信度</span>
+                  <strong>{{ top1.confidence_pct }}</strong>
+                </div>
               </div>
 
-              <h3>Top-5 候选结果</h3>
+              <div class="result-heading">
+                <h3>Top-5 候选结果</h3>
+                <span>按模型置信度由高到低排序</span>
+              </div>
               <div class="table-scroll">
                 <table>
                   <thead>
                     <tr>
                       <th>排名</th>
-                      <th>类别</th>
-                      <th>英文名</th>
+                      <th>中文类别</th>
+                      <th>英文名称</th>
                       <th>置信度</th>
                     </tr>
                   </thead>
                   <tbody>
                     {% for item in top5 %}
-                      <tr>
-                        <td>{{ item.rank }}</td>
+                      <tr class="{% if loop.first %}best-row{% endif %}">
+                        <td><span class="rank-badge">{{ item.rank }}</span></td>
                         <td>{{ item.zh }}</td>
                         <td>{{ item.en }}</td>
-                        <td>{{ item.confidence_pct }}</td>
+                        <td><strong>{{ item.confidence_pct }}</strong></td>
                       </tr>
                     {% endfor %}
                   </tbody>
@@ -80,7 +92,10 @@
             {% endif %}
           </div>
           <div id="resultEmpty" class="empty result-empty {% if top1 %}hidden{% endif %}">
-            预测结果会在上传后显示。
+            <div>
+              <strong>识别结果</strong>
+              <span>完成上传并点击“开始预测”后，这里将展示 Top-1 识别结论和 Top-5 候选类别。</span>
+            </div>
           </div>
         </section>
       </div>
@@ -120,7 +135,7 @@
     }
 
     function hideAllMessages() {
-      clientAlert.textContent = "请先选择图片";
+      clientAlert.textContent = "请先选择一张花卉图片";
       serverAlert.textContent = "";
       hideElement(clientAlert);
       hideElement(serverAlert);
@@ -156,7 +171,7 @@
       previewImage.removeAttribute("src");
       previewImage.src = "";
       hideElement(previewImage);
-      previewEmpty.textContent = "上传一张花卉图片后，这里会显示预览。";
+      previewEmpty.innerHTML = "<div><strong>图像预览</strong><span>上传一张花卉图片后，系统将在此展示待识别图像，便于对照预测结果。</span></div>";
       showElement(previewEmpty);
     }
 
@@ -171,7 +186,7 @@
     function resetResults() {
       resultContent.innerHTML = "";
       hideElement(resultContent);
-      resultEmpty.textContent = "预测结果会在上传后显示。";
+      resultEmpty.innerHTML = "<div><strong>识别结果</strong><span>完成上传并点击“开始预测”后，这里将展示 Top-1 识别结论和 Top-5 候选类别。</span></div>";
       showElement(resultEmpty);
     }
 
@@ -215,7 +230,7 @@
         };
         image.onerror = () => {
           URL.revokeObjectURL(url);
-          reject(new Error("图片读取失败，请换一张再试。"));
+          reject(new Error("图片读取失败，请更换一张后重试。"));
         };
         image.src = url;
       });
@@ -227,7 +242,7 @@
           if (blob) {
             resolve(blob);
           } else {
-            reject(new Error("图片压缩失败，请换一张再试。"));
+            reject(new Error("图片压缩失败，请更换一张后重试。"));
           }
         }, type, quality);
       });
@@ -344,7 +359,7 @@
 
       const fileToUpload = compressedUploadFile || selectedOriginalFile;
       if (!fileToUpload) {
-        clientAlert.textContent = "请先选择图片";
+        clientAlert.textContent = "请先选择一张花卉图片";
         showElement(clientAlert);
         return;
       }
